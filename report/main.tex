@@ -1,0 +1,306 @@
+\input{preamble}
+
+\begin{document}
+\thispagestyle{empty}
+
+% ---------------- TITLE PAGE ----------------
+\begin{center}
+\vspace*{1.4cm}
+{\color{rule}\rule{\textwidth}{1.4pt}}\\[4pt]
+{\sffamily\footnotesize\color{inksoft}%
+ \MakeUppercase{\hspace{0.15em}C\,S\,E\,4\,0\,6 \ \textbullet\ \ Security Sessional \ \textbullet\ \ Design Report}}\\[6pt]
+{\color{rule}\rule{\textwidth}{0.6pt}}
+
+\vspace{2.2cm}
+{\sffamily\color{accent}\large Topic 20 --- Wi-Fi Password Cracking Attack \& Defense}\\[1.0cm]
+{\bfseries\fontsize{27}{31}\selectfont WPA2 Handshake Capture,}\\[4pt]
+{\bfseries\fontsize{27}{31}\selectfont Offline Dictionary Attack}\\[4pt]
+{\bfseries\fontsize{27}{31}\selectfont \& WPA3-SAE Defense}\\[0.9cm]
+{\large\itshape\color{inksoft} A from-scratch WPA2-PSK attack --- our own EAPOL parsing\\[2pt]
+ and PMK/PTK/MIC cryptography --- with a working WPA3-SAE defense demonstration.}\\[10pt]
+\begin{minipage}{0.82\textwidth}\centering\small\color{inksoft}
+No \code{aircrack-ng}, \code{hashcat}, \code{pyrit} or \code{hcxtools}. \code{scapy} is used only to
+sniff and craft raw 802.11 frames --- never for the cracking mathematics.
+\end{minipage}
+
+\vspace{2.4cm}
+{\color{rule}\rule{0.5\textwidth}{0.6pt}}\\[10pt]
+{\sffamily\small\bfseries\color{ink}GROUP MEMBERS}\\[8pt]
+\groupmembers
+
+\vspace{1.0cm}
+\supervisorblock
+
+\vfill
+{\sffamily\footnotesize\color{inksoft}Department of Computer Science and Engineering, BUET \\[2pt]
+Design Report --- submitted for evaluation}
+\end{center}
+\clearpage
+
+% ============================================================
+\section{Overview of the Project Idea}
+
+Most home and small-office Wi-Fi networks use WPA2-PSK security: every device that joins types in the same shared password (the ``Wi-Fi password''). That password is never sent over the air. Instead, when a device connects, it and the access point (AP) run a short exchange called the \textbf{4-way handshake} to prove to each other that they both know the password, without either one ever transmitting it in the clear. This handshake is carried inside a Wi-Fi management protocol called \textbf{EAPOL} (Extensible Authentication Protocol over LAN).
+
+This project attacks that scheme end to end. It does \emph{not} try to guess the password by talking to the AP directly --- that would be slow and would get noticed. Instead, it \textbf{captures one handshake off the air}, and then, completely \textbf{offline}, tries candidate passwords from a wordlist until one of them reproduces the exact cryptographic proof seen in the captured handshake. This is possible because the handshake contains enough information for anyone holding a candidate password to check, by themselves, whether that password is the right one --- the AP does not need to be asked.
+
+\subsection{Two phases}
+The project is split into an \textbf{online phase} (needs a wireless card in radio range of the target) and an \textbf{offline phase} (needs only the saved capture file, and can run anywhere, later, on any machine):
+
+\begin{itemize}
+\item \textbf{Online} --- \code{capture.py} passively listens for a client completing the 4-way handshake with the target AP and saves it to a file. \code{deauth.py} is an optional accelerant: it forges Wi-Fi deauthentication frames to knock a connected client offline so it reconnects immediately, instead of waiting for that to happen naturally.
+\item \textbf{Offline} --- \code{handshake.py} parses the saved capture file into candidate handshakes, and \code{crack.py} runs the actual dictionary attack: for each candidate password, it derives the same keys the AP and client would have derived, and checks whether they match what was captured.
+\end{itemize}
+
+\subsection{What is, and is not, reused}
+The cracking mathematics --- pcap parsing, 802.11/EAPOL frame decoding, PMK/PTK derivation, and MIC verification, in \code{handshake.py} and \code{crack.py} --- is a from-scratch implementation with \textbf{zero third-party cracking dependencies}: no \code{aircrack-ng}, \code{hashcat}, \code{pyrit}, or \code{hcxtools} is invoked anywhere. \code{capture.py} and \code{deauth.py} use the \code{scapy} library for one job only --- sniffing and crafting raw 802.11 radio frames --- in place of tools like \code{airodump-ng}/\code{aireplay-ng}. This distinction matters for the rest of the report: sections~\ref{sec:frame}--\ref{sec:justify} describe code that this project wrote and controls, not the behaviour of an external tool.
+
+\subsection{Scope}
+The target is \textbf{WPA2-PSK} (personal / pre-shared-key) networks specifically, using CCMP (AES) or TKIP pairwise ciphers --- the common case for home routers. Enterprise Wi-Fi (802.1X with a RADIUS server, a different key hierarchy) is out of scope. WPA3-SAE is out of scope as an \emph{attack} target --- and is in fact the centrepiece of our \emph{defense} (section~\ref{sec:defense}), which we both design and demonstrate in code.
+
+\subsection{Division of work}
+The two phases split cleanly along the online/offline boundary, and the work was divided the same way; both members jointly integrated, tested, and wrote the report.
+
+\begin{table}[H]\centering\small
+\setlength{\tabcolsep}{9pt}
+\begin{tabularx}{\textwidth}{@{}L{4.9cm} L{9.2cm}@{}}
+\toprule
+\thd{Member} & \thd{Responsible for} \\
+\midrule
+Nabiha Tahseen \newline (2105031) & \textbf{Online phase} --- \code{capture.py} and \code{deauth.py}: monitor-mode setup, passive EAPOL sniffing, and from-scratch 802.11 deauthentication-frame crafting/injection with \code{scapy}; live capture during the demo. \\
+Md.\ Mosharaf Hossain Apurbo \newline (2105057) & \textbf{Offline phase and defense} --- \code{handshake.py} (pcap/802.11/EAPOL parser), \code{crack.py} (PMK/PTK/MIC cryptography and the wordlist engine), \code{test\_crack.py}, and the WPA3-SAE defense (\code{wpa3\_demo.py}). \\
+\midrule
+Both members & \code{config.py}, end-to-end integration and testing, and this report. \\
+\bottomrule
+\end{tabularx}
+\caption{Division of work between the two group members.}
+\end{table}
+
+% ============================================================
+\section{Network Topology, Components and Timing}
+
+Three parties are involved: a legitimate \textbf{Client (STA)} that already has the Wi-Fi password and is on the network; the target \textbf{Access Point (AP)}, identified by a fixed hardware address called its BSSID; and the \textbf{Attacker}, who only needs a wireless network card capable of \emph{monitor mode} within radio range of both --- no prior access to the network is required. Monitor mode lets a wireless card read every frame it can physically hear on a channel, not just frames addressed to it, which is what makes passive sniffing possible.
+
+\bigskip
+\FIGONE
+
+\subsection{Components}
+The attack is five small scripts plus a settings file, with a sixth standalone script (\code{wpa3\_demo.py}) for the defense (section~\ref{sec:defense}). Each has a single, sharply-defined job, and the two offline scripts touch no radio at all.
+
+\begin{table}[H]\centering\small
+\setlength{\tabcolsep}{9pt}
+\begin{tabularx}{\textwidth}{@{}>{\ttfamily}l L{5.3cm} L{5.3cm}@{}}
+\toprule
+\thd{File} & \thd{Role} & \thd{Notes} \\
+\midrule
+config.py & Single settings file: SSID, BSSID, channel, interfaces, file paths, tunables. & The only file meant to be edited by hand. \\
+capture.py & Passively sniffs the monitor interface and saves a usable handshake. & Needs \code{scapy} and root. Never sends deauth frames itself. \\
+deauth.py & Optional: forges deauth frames to force a client to reconnect. & Needs \code{scapy}, root, and \code{config.CLIENT\_MAC} set. \\
+handshake.py & Parses the \code{.cap} file into candidate 4-way handshakes. & Pure standard library. No radio access needed. \\
+crack.py & PMK/PTK/MIC crypto plus the \code{info} / \code{single} / \code{wordlist} CLI. & Pure standard library. No radio access needed. \\
+test\_crack.py & Automated regression tests for the parser and crypto. & Runs against a real, saved capture file. \\
+wpa3\_demo.py & \textbf{Defense demo:} reruns the exact offline attack against a WPA3-SAE capture and shows it fails. & Standalone; imports the others read-only. See section~\ref{sec:defense}. \\
+\bottomrule
+\end{tabularx}
+\caption{The attack scripts and the settings file, plus the WPA3-SAE defense demo, with each one's single responsibility.}
+\end{table}
+
+\subsection{The 4-way handshake and its timing}
+Once a client is connected, the AP and the client run four EAPOL messages back and forth to derive a fresh session key from the shared password without ever transmitting it. Each message carries a \emph{Key Information} field whose bits identify which of the four messages it is (see section~\ref{sec:keyinfo}). Figure~\ref{fig:timing} shows the original protocol together with the optional forged-deauth step, and marks exactly what each piece of code keeps or uses.
+
+\FIGTWO
+
+\begin{itemize}
+\item \textbf{Msg 1} (AP\,$\rightarrow$\,Client): the AP sends a fresh random number, the \textbf{ANonce}.
+\item \textbf{Msg 2} (Client\,$\rightarrow$\,AP): the client replies with its own random number, the \textbf{SNonce}, plus a \textbf{Message Integrity Code (MIC)} that only someone who derived the right session key could produce.
+\item \textbf{Msg 3} (AP\,$\rightarrow$\,Client): the AP confirms and repeats the same ANonce, together with the group key and its own MIC.
+\item \textbf{Msg 4} (Client\,$\rightarrow$\,AP): the client acknowledges. The handshake is now complete.
+\end{itemize}
+
+\code{capture.py} commits to a client as soon as it has seen that client's Msg 1 and Msg 2 --- that pair alone is enough to attack offline --- then waits up to \code{GRACE\_PERIOD\_SEC = 5} more seconds for a confirming Msg 3 and Msg 4 before writing the capture file. A capture that only ever got Msg 1+Msg 2 is still fully crackable; it is just not independently confirmed by the AP.
+
+% ============================================================
+\section{Packet and Frame Structure}\label{sec:frame}
+
+An EAPOL handshake message does not travel by itself --- it is wrapped inside several layers, like an envelope inside an envelope. From the outside in: a normal 802.11 data-frame header, then an LLC/SNAP header that tags the payload as EAPOL, then the EAPOL header, then the EAPOL-Key body that actually carries the ANonce/SNonce and MIC. Figure~\ref{fig:frame} shows exactly how each layer is sliced, using the same byte offsets and variable names as the code.
+
+\FIGTHREE
+
+\subsection{Reading the diagram}
+\begin{itemize}
+\item \textbf{Layer 1 (802.11 header):} only Frame Control and the three address fields are read. The \code{to\_ds}/\code{from\_ds} bits inside Frame Control tell \code{parse\_80211\_header()} which address is the AP and which is the station, and how long the header is (24, 30, 32, or 38 bytes, depending on whether Addr4 and a QoS Control field are present).
+\item \textbf{Layer 2 (LLC/SNAP, 8 bytes):} \code{extract\_eapol()} requires the DSAP/SSAP/Control bytes to read exactly \code{AA AA 03} and the EtherType to read \code{88-8E} (the reserved value for EAPOL). Anything else is rejected as ``not an EAPOL frame''.
+\item \textbf{Layer 3 (EAPOL header, 4 bytes):} the Body Length field tells the parser exactly how many bytes to slice, so a truncated or padded capture frame cannot be mistaken for a complete one.
+\item \textbf{Layer 4 (EAPOL-Key body):} \code{parse\_eapol\_key()} rejects anything shorter than 99 bytes outright. The Key Nonce field (32 bytes) is the ANonce on Msg 1/Msg 3 and the SNonce on Msg 2. Three fields in the middle --- Key IV, Key RSC, and Key ID/Reserved --- exist in every real EAPOL-Key frame but are never read by this parser; they carry no information the MIC check needs.
+\end{itemize}
+
+\subsection{The Key Information field}\label{sec:keyinfo}
+Key Information is a 2-byte bit field. This project reads five things out of it: four single flag bits, and a 3-bit descriptor-version number. Figure~\ref{fig:keyinfo} shows the exact bit positions, matching the constants defined at the top of \code{handshake.py}.
+
+\FIGFOUR
+
+\code{classify\_message()} combines these four flags to name each message. This is the exact truth table the code implements (and the exact values exercised by \code{test\_crack.py}'s \code{test\_classify\_message}):
+
+\begin{table}[H]\centering\small
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{@{}l cccc >{\ttfamily\footnotesize}l >{\ttfamily}l@{}}
+\toprule
+\thd{Message} & \thd{ACK} & \thd{MIC} & \thd{Secure} & \thd{Install} & \normalfont\thd{Condition in code} & \normalfont\thd{Key Info} \\
+\midrule
+Msg 1 & \bit1 & \bz  & \dsh & \dsh & ack and not mic & 0x0080 \\
+Msg 2 & \bz  & \bit1 & \bz  & \dsh & mic and not ack and not secure & 0x0100 \\
+Msg 3 & \bit1 & \bit1 & \bit1 & \bit1 & ack and mic and secure and install & 0x03C0 \\
+Msg 4 & \bz  & \bit1 & \bit1 & \bz  & mic and secure and not ack and not install & 0x0300 \\
+\bottomrule
+\end{tabular}
+\caption{The message-classification truth table implemented by \code{classify\_message()}. A dash means the bit is not tested for that message.}
+\end{table}
+
+Any other combination of bits classifies as \code{0} and is ignored --- it cannot belong to a standard 4-way handshake, so there is nothing for the parser to do with it.
+
+% ============================================================
+\section{Implementation Plan}
+
+The pipeline below is the actual sequence of five scripts, in the order they run and the order data flows between them. Figure~\ref{fig:pipeline} shows it as a flowchart; the steps underneath name the exact functions involved.
+
+\FIGFIVE
+
+\subsubsection{Step 1 --- Configure}
+Every target-specific and file-specific value --- \code{MONITOR\_INTERFACE}, \code{SSID}, \code{BSSID}, \code{CHANNEL}, \code{CLIENT\_MAC}, \code{CAPTURE\_FILE}, \code{WORDLIST\_FILE} --- lives in \code{config.py} and nowhere else, so every other script imports it rather than hard-coding a path or address.
+
+\subsubsection{Step 2 --- Capture (and, optionally, accelerate)}
+\code{capture.py} puts a monitor-mode interface to work: for every sniffed packet that carries both a \code{Dot11} and an \code{EAPOL} layer, it re-uses \code{handshake.classify\_message()} (the exact same function the offline parser uses --- the live sniffer and the offline parser never disagree about what a Msg 1--4 looks like) to label it. Once one client has produced both Msg 1 and Msg 2, that client is locked in as the target; the script then waits up to 5 more seconds for Msg 3/Msg 4 before writing every collected EAPOL packet to \code{CAPTURE\_FILE} with \code{scapy}'s \code{wrpcap()}. It never transmits anything itself.
+
+\code{deauth.py} is a separate, optional process: it crafts two forged 802.11 deauthentication frames with \code{scapy} (one addressed to the client claiming to be from the AP, one addressed to the AP claiming to be from the client), and sends 10 bursts of both, 100 ms apart. It refuses to run unless \code{config.CLIENT\_MAC} is set, since a deauth frame needs a specific target. Running it in a second terminal while \code{capture.py} listens is what actually produces a fast, complete capture; running \code{capture.py} alone just waits for a natural reconnect.
+
+\subsubsection{Step 3 --- Parse the capture}
+\code{handshake.py}'s \code{extract\_handshakes()} turns the saved file into a list of candidate handshakes. It reads the pcap global header to detect linktype 105 (plain 802.11) or 127 (Radiotap-wrapped, what \code{capture.py}'s live \code{scapy} sniffing writes) and calls \code{strip\_radiotap()} automatically in the second case. It then filters every frame down to the target BSSID, decodes EAPOL-Key frames, and separates them into two pools per station: every ANonce ever seen (from that station's Msg 1s and Msg 3s --- a busy AP can retransmit Msg 1 with a fresh ANonce, and the one Msg 1 a station actually used can be missed by a lossy capture, but Msg 3 always repeats the ANonce it is confirming), and every Msg 2 (SNonce, captured MIC, and the EAPOL frame with its MIC field zeroed out, ready for recomputation). Because there is no way to know in advance which ANonce paired with which Msg 2, every ANonce for a station is paired with every one of that station's Msg 2s, producing one \code{Handshake} object per pairing. Candidates confirmed by a following Msg 3+Msg 4 are sorted first, since they are independently verified by the AP itself, but every candidate is still tried.
+
+\subsubsection{Step 4 --- Crack (info / single / wordlist)}
+\code{crack.py} tests one candidate password against every \code{Handshake} object in one call to \code{test\_password()}:
+
+\begin{itemize}
+\item \code{derive\_pmk(password, ssid)} --- PBKDF2-HMAC-SHA1(password, ssid, 4096 iterations, 32 bytes). The SSID is the cryptographic salt, which is why \code{config.SSID} must match the captured network exactly.
+\item \code{derive\_ptk(pmk, ap\_mac, sta\_mac, anonce, snonce)} --- PRF-512: a counter-driven loop of HMAC-SHA1 over the label ``Pairwise key expansion'', both MAC addresses (smaller one first), and both nonces (smaller one first), producing 64 bytes.
+\item \code{derive\_kck(ptk)} --- the first 16 bytes of the PTK: the Key Confirmation Key used only to authenticate handshake messages (a separate slice of the PTK encrypts real data traffic, and is not needed for cracking).
+\item \code{compute\_mic(kck, frame, descriptor\_version)} --- HMAC-MD5 (descriptor version 1, WPA/TKIP) or the first 16 bytes of HMAC-SHA1 (version 2, WPA2/CCMP --- the case for this project's own capture) over the zero-MIC'd EAPOL frame. Version 3 (AES-128-CMAC, used by 802.11r and WPA3-style networks) is not implemented and raises \code{ValueError} rather than guessing.
+\end{itemize}
+
+The result is compared byte-for-byte to the MIC actually captured in Msg 2. Three CLI modes drive this:
+
+\begin{table}[H]\centering\small
+\setlength{\tabcolsep}{9pt}
+\begin{tabularx}{\textwidth}{@{}>{\ttfamily}l L{12.2cm}@{}}
+\toprule
+\thd{Mode} & \thd{Behaviour} \\
+\midrule
+info & Parses the capture and prints candidate count plus the best candidate's station MAC, replay counter, Complete-4-way flag, descriptor version, and raw ANonce/SNonce/MIC. \\
+single & Tests exactly one password. Prints \code{MATCH} or \code{NO MATCH}; exit code 0 or 1. \\
+wordlist & Streams \code{WORDLIST\_FILE} in chunks of \code{WORDLIST\_CHUNK\_SIZE} (2000) passwords, spread across a \code{multiprocessing.Pool} sized to the CPU count by default, and stops at the first match. \\
+\bottomrule
+\end{tabularx}
+\caption{The three cracking modes exposed by \code{crack.py}.}
+\end{table}
+
+\subsubsection{Step 5 --- Validate}
+\code{test\_crack.py} is the regression safety net: parsing tests that run against whatever capture \code{config.CAPTURE\_FILE} currently points to, unit tests for Radiotap stripping and message classification, crypto tests that check output lengths and determinism, and a set of tests pinned to a frozen backup capture (so they keep testing something real even after a fresh \code{capture.py} run replaces the working file) --- covered in detail in section~\ref{sec:outcome}.
+
+% ============================================================
+\section{Why the Design Works}\label{sec:justify}
+
+The design rests on one fact about the 4-way handshake: it is a \emph{verifiable} proof. Everything the AP and client use to build and check the MIC is either public or is carried, in the clear, inside the handshake itself. So an attacker who guesses the password can reproduce the entire key derivation offline and see, byte-for-byte, whether the guess was right --- exactly what the AP would do, but without the AP.
+
+\begin{whybox}
+\textbf{The cryptographic chain is deterministic.} Given a password and the captured values, PMK\,$\rightarrow$\,PTK\,$\rightarrow$\,KCK\,$\rightarrow$\,MIC is a fixed sequence of standard primitives (PBKDF2-HMAC-SHA1, PRF-512, HMAC-SHA1/MD5). The right password \emph{must} regenerate the captured MIC; a wrong password will not, except with cryptographically negligible probability. There is no tolerance, tuning, or guesswork in the check itself.
+\end{whybox}
+
+\begin{itemize}
+\item \textbf{The capture is sufficient.} A single Msg 1 + Msg 2 pair already carries every input the check needs: the ANonce, the SNonce, both MAC addresses, the descriptor version, and the captured MIC over a frame we can zero and recompute. The SSID (the PBKDF2 salt) is known from \code{config.py}. Nothing else is required --- which is why the attack is fully offline and needs the AP only once, passively.
+\item \textbf{The parser is robust to real captures.} Linktype auto-detection (105 vs.\ 127) and automatic Radiotap stripping mean the same code reads both airodump-ng-style and live-\code{scapy} captures. Pairing \emph{every} ANonce with \emph{every} Msg 2 per station guarantees that packet loss or a Msg 1 retransmission cannot hide the one valid pairing --- if a crackable handshake was captured, it becomes one of the candidates tried.
+\item \textbf{The same classifier runs online and offline.} \code{capture.py} and \code{handshake.py} call one \code{classify\_message()}, so a handshake the sniffer accepts is exactly one the parser can re-read --- there is no drift between what is captured and what is crackable.
+\item \textbf{It is empirically confirmed.} On a real capture, this project's from-scratch crypto and \code{aircrack-ng} independently recover the \emph{same} password from the \emph{same} bytes (section~\ref{sec:outcome}). Two independent implementations agreeing is the strongest evidence that the PMK/PTK/MIC math is correct, not merely self-consistent.
+\end{itemize}
+
+% ============================================================
+\section{Expected Outcome of a Successful Attack}\label{sec:outcome}
+
+Because every stage of this pipeline prints its own status, a successful run is easy to recognise concretely at each stage --- no external tool's output has to be interpreted.
+
+\subsection{During capture}
+\code{capture.py} prints one line per handshake message it recognises, and once Msg 1+Msg 2 are in hand for one client, commits to it and reports whether the grace period also caught a confirming Msg 3/Msg 4 before writing the file:
+
+\begin{console}
+{}[+] Msg1/4 from 86:09:70:ae:a2:f3  (have [1]/4 for this client)\\
+{}[+] Msg2/4 from 86:09:70:ae:a2:f3  (have [1, 2]/4 for this client)\\
+{}[+] Saved 4 EAPOL frame(s) to capture-01.cap for client 86:09:70:ae:a2:f3 (complete 4-way)
+\end{console}
+
+\subsection{During cracking}
+\begin{itemize}
+\item \code{crack.py info} prints the candidate count and the best candidate's details (station MAC, replay counter, Complete 4-way flag, descriptor version, raw ANonce/SNonce/MIC in hex) --- the sanity check that a usable handshake actually exists before spending time on a wordlist.
+\item \code{crack.py single "27111998"} prints exactly \code{[+] MATCH -> password is: 27111998} and exits 0 on a correct guess, or \code{[-] NO MATCH} and exits 1 otherwise.
+\item \code{crack.py wordlist} prints a progress line roughly every 20,000 candidates, then either \code{[+] KEY FOUND! -> <password>} and exits 0 the moment any worker matches, or, after the whole file is exhausted, \code{[-] Password not found in wordlist.}
+\end{itemize}
+
+\subsection{A concrete, checked example}
+\code{test\_crack.py}'s \code{TestAgainstKnownGoodCapture} class is a real, working example of exactly this outcome, pinned to a frozen backup capture so it cannot silently stop testing anything: it asserts that \code{test\_password(handshakes, "Niloy", "27111998")} returns \code{True} for that capture's real password, and that an obviously wrong password returns \code{False}. The correct-password result was cross-checked independently against \code{aircrack-ng} on the same capture and wordlist, which agrees. This double confirmation --- this project's own from-scratch crypto, and an established external tool, reaching the same answer on the same bytes --- is the strongest evidence in the repository that the PMK/PTK/MIC implementation is correct, not just internally consistent.
+
+\subsection{What a found password actually means}
+A successful crack recovers the plaintext WPA2-PSK passphrase for the target network. From that point, no further capture or cracking is needed: the same passphrase, together with a captured or future ANonce/SNonce pair, lets an attacker derive the session keys needed to join the network as a normal peer, or to decrypt traffic they can also capture the surrounding handshake for. The password itself is also very often reused by the same person elsewhere, which is a real risk independent of this specific Wi-Fi network.
+
+% ============================================================
+\section{Defense Mechanism}\label{sec:defense}
+
+The attack works for one structural reason: in WPA2-PSK the whole chain PMK\,$\rightarrow$\,PTK\,$\rightarrow$\,MIC is a deterministic function of the passphrase, so a captured handshake can be checked against guesses \emph{offline}. A real defense must remove that property, not just slow guessing down. We use three layers and --- for the bonus --- \textbf{implement and demonstrate} the strongest, \textbf{WPA3-Personal (SAE) with mandatory PMF} (\code{wpa3\_demo.py}), while recommending two configuration hardenings (a high-entropy passphrase; deauth-flood detection) that we describe but did not emulate.
+
+\subsection{Implemented defense --- WPA3-Personal (SAE) with PMF}
+
+\subsubsection{Why the attack works, and how SAE kills it}
+In WPA2-PSK the master key is $\text{PMK} = \text{PBKDF2-HMAC-SHA1}(\text{passphrase}, \text{SSID}, 4096, 32)$, and every later value (PTK, KCK, the Msg~2 MIC) follows from it plus clear-text handshake fields --- so an attacker tests unlimited guesses offline. WPA3-Personal replaces this with \textbf{SAE} (the ``Dragonfly'' handshake), whose key difference is \emph{where the PMK comes from}:
+
+\begin{whybox}
+\textbf{In WPA3-SAE the PMK is not a function of the passphrase.} It is the output of a live elliptic-curve Commit/Confirm exchange \emph{with the AP}. Testing a guess therefore means completing a full SAE handshake against the AP --- one \textbf{online}, rate-limited attempt each (anti-clogging tokens + mandatory PMF) --- not an offline computation. No function maps a captured transcript plus a guessed passphrase to the captured MIC.
+\end{whybox}
+
+Figure~\ref{fig:sae} contrasts the two key chains; Figure~\ref{fig:saetiming} shows the SAE exchange and how mandatory PMF also rejects the forged deauthentication that \code{deauth.py} relies on.
+
+\FIGSIX
+\FIGSEVEN
+
+\subsubsection{Our implementation: \code{wpa3\_demo.py}}
+So the failure cannot be dismissed as ``you just never coded the newer MIC,'' \code{wpa3\_demo.py} \textbf{implements the AES-128-CMAC MIC} that WPA3 uses, then runs the \emph{exact} WPA2 attack from \code{crack.py} (reusing its \code{derive\_pmk} / \code{derive\_ptk} / \code{derive\_kck}) against a WPA3 capture. It imports the attack code read-only and changes nothing.
+
+\begin{table}[H]\centering\small
+\setlength{\tabcolsep}{10pt}
+\begin{tabular}{@{}c l l@{}}
+\toprule
+\thd{Key descriptor version} & \normalfont\thd{Security} & \normalfont\thd{MIC algorithm} \\
+\midrule
+1 & WPA / TKIP & HMAC-MD5 \\
+2 & WPA2-PSK (CCMP) & HMAC-SHA1-128 \\
+0 / 3 & WPA3-SAE / PMF & \textbf{AES-128-CMAC} (added by \code{wpa3\_demo.py}) \\
+\bottomrule
+\end{tabular}
+\caption{The MIC algorithm per key-descriptor version. \code{crack.py} implements versions 1 and 2; \code{wpa3\_demo.py} adds 0/3, so the WPA3 attack cannot be dismissed as failing merely for lack of code.}
+\end{table}
+
+Even with the correct MIC implemented, and even for the \emph{correct} password, the result is \textsc{no match}:
+
+\begin{console}
+{}\$ python3 code/wpa3\_demo.py info\\
+{}[+] Key descriptor ver  : 0  ->  WPA3-SAE / PMF (AES-128-CMAC MIC) -- PMK is NOT PBKDF2(passphrase)\\
+{}\$ python3 code/wpa3\_demo.py single "<the real password>"\\
+{}[-] NO MATCH -> '<the real password>' does not reproduce the captured MIC\\
+{}\ \ \ \ >>> DEFENSE CONFIRMED: run with AES-128-CMAC fully implemented, even the correct password fails.
+\end{console}
+
+\subsubsection{Reproducing it, and one caveat}
+Set the AP to \textbf{WPA3-Personal only}, point \code{config.py} at it, re-capture (\code{capture.py} still records a 4-way handshake), and run \code{wpa3\_demo.py} \code{info} / \code{single} / \code{wordlist}: all report descriptor version~0 (AES-128-CMAC) and \textsc{no match}. \textbf{Caveat:} do \emph{not} use WPA3 ``transition'' (mixed) mode --- it keeps advertising WPA2, letting an attacker downgrade a client and crack it exactly as before. Enabling WPA3 is not enough if WPA2 is left on beside it.
+
+\subsection{Recommended hardenings (described, not emulated)}
+\textbf{A high-entropy passphrase.} PBKDF2's 4096 iterations only help if the search space is large. The recovered \code{27111998} is a birthdate (DDMMYYYY) --- exactly what a wordlist finds in seconds. A random passphrase (from a password manager, or several unrelated random words) keeps the \emph{same} offline attack computationally infeasible: iterations buy time per guess, but only entropy buys enough guesses to matter.
+
+\smallskip
+\noindent\textbf{Deauthentication-flood detection.} \code{deauth.py}'s signature --- ten bursts of two forged frames, 100\,ms apart --- is easily flagged and rate-limited by a WIDS or an AP's management-frame protection; without a working deauth, \code{capture.py} must wait for a natural reconnect, giving an operator time to notice. (Layer~1's mandatory PMF subsumes this by authenticating management frames outright.)
+
+\end{document}

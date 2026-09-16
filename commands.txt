@@ -1,0 +1,36 @@
+1.
+iw dev
+iw dev wlan0 link
+
+2.
+switch to monitor mode:
+sudo airmon-ng check kill
+sudo airmon-ng start wlan0 153  --> tunes on specific channnel
+
+3.
+iw dev
+sudo iw dev wlan0mon set channel 153 --> set the monitor mode channel t0 153
+
+4.
+sudo python3 code/capture.py
+python3 code/crack.py info
+python3 code/crack.py single "your password"
+
+5.
+python3 code/crack.py wordlist
+
+6.
+switch to managed mode:
+sudo airmon-ng stop wlan0mon
+sudo systemctl restart NetworkManager
+
+6.
+sudo modprobe -r mt7921e
+sudo modprobe mt7921e
+
+
+7.
+if modprobe complains then-->
+sudo modprobe -r mt7921e mt7921_common mt792x_lib mt76_connac_lib mt76
+sudo modprobe mt7921e
+
