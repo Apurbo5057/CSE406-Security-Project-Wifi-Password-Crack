@@ -1,0 +1,34 @@
+# --- Large public wordlists (not tracked; download separately) ---
+rockyou.txt
+**/rockyou.txt
+RockYou Password List/
+**/RockYou Password List/
+testlist.txt
+**/testlist.txt
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- Captured / generated packet artifacts (regenerable) ---
+*.cap
+*.pcap
+*.csv
+*.netxml
+*.kismet.*
+
+# --- LaTeX build artifacts ---
+*.aux
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.swp
