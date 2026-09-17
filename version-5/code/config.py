@@ -10,27 +10,37 @@ from pathlib import Path
 # pass to `iw ... set channel` when putting the NIC in monitor mode — but it's
 # kept here too so every setting for the pipeline lives in one file.
 
+SSID = "Rezan"
+BSSID ="6c:4c:bc:4f:94:2a"
+CHANNEL = 4
+
+
 # mobile hotspot
-SSID = "Redmi Note 11"
-BSSID = "36:94:5e:43:f9:4d"
-CHANNEL = 11
+# SSID = "Apurbo phone"
+# BSSID = "0a:6c:09:34:56:8b"
+# CHANNEL = 11
 # FREQUENCY = 2.4 
 
 #5c:62:8b:ba:fc:87
 #3c:52:a1:c5:2a:85
+#5c:62:8b:ba:fd:3f
+#76:fe:ce:2e:ed:5e
 # SSID = "Alexander the Great"
-# BSSID = "5c:62:8b:ba:fc:87"
-# CHANNEL = 153
+# BSSID = "76:fe:ce:2e:ed:5e"
+# CHANNEL = 2
 
 
 CLIENT_MAC = ""
 MONITOR_INTERFACE = "wlan0mon"
 CAPTURE_FILE = "capture-01.cap"
-WORDLIST_FILE = "testlist.txt"
+WORDLIST_FILE = "rockyou.txt"
 
 
 
-#76:FE:CE:2E:ED:5E  --> 5
+#client mac
+#8e:d3:23:10:86:a6
+#b6:47:5c:ec:f9:3f --> shirin phone
+#5e:33:8c:67:33:fe --> amma phone
 
 
 
@@ -40,7 +50,7 @@ WORDLIST_FILE = "testlist.txt"
 # caller's cwd) means the tool works no matter where it's invoked from.
 BASE_DIR = Path(__file__).resolve().parent.parent
 CAPTURE_FILE = BASE_DIR / "capture-01.cap"
-WORDLIST_FILE = BASE_DIR / "testlist.txt"
+WORDLIST_FILE = BASE_DIR / "rockyou.txt"
 
 # --- Cracking tunables -------------------------------------------------------
 WORDLIST_CHUNK_SIZE = 2000   # passwords handed to a worker process at a time
